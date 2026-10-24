@@ -135,7 +135,7 @@ def receive_bonus():
         ['click', 300, 1050, 2],
         ['click', 330, 170, 2],
         ['click', 780, 250, 2],
-        ['click', 850, 850, 1],
+        ['click', 850, 850, 2],
         ['click', 850, 850, 0.5],
     ]
     execute(commands)
