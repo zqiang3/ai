@@ -88,6 +88,7 @@ def _to_simplified(text: str) -> str:
 
 
 def _transcribe_siliconflow(path: str) -> str:
+    print('using SILICONFLOW')
     api_key = os.environ.get("SILICONFLOW_API_KEY")
     if not api_key:
         raise RuntimeError("环境变量 SILICONFLOW_API_KEY 未设置")
@@ -151,6 +152,21 @@ def _convert_price(price: str) -> str:
     return price
 
 
+# 支持的下单指令前缀：「出价」「估价」均可，二者执行相同动作。
+ORDER_PREFIXES = ("出价", "估价")
+
+# 意图识别返回这些值时视为「未知」：不提示、不执行动作，直接监听下一段音频。
+UNKNOWN_INTENTS = {"", "未知", "unknown", "none", "null"}
+
+
+def _order_price(text: str) -> str | None:
+    """若 text 以「出价」/「估价」开头，返回换算后的金额，否则返回 None。"""
+    for prefix in ORDER_PREFIXES:
+        if text.startswith(prefix):
+            return _convert_price(text[len(prefix):].strip())
+    return None
+
+
 @app.post("/asr")
 def asr():
     upload = request.files.get("audio") or request.files.get("file")
@@ -162,44 +178,115 @@ def asr():
     return Response(text, mimetype="text/plain")
 
 
-@app.post("/command/voice")
-def command_voice():
-    upload = request.files.get("audio") or request.files.get("file")
-    if upload is None:
-        return {"error": "missing audio file field: audio"}, 400
+def _transcribe_with_channel(path: str) -> tuple[str, str]:
+    """转写并返回 (text, channel)。
 
+    channel 取值："local"（本地 faster-whisper）或 "siliconflow"（在线接口）。
+    优先本地，本地失败或结果为空时回退到 siliflow。
+    """
+    try:
+        text = _to_simplified(_transcribe_local(path))
+        if text:
+            return text, "local"
+        print("local asr returned empty text, fallback to siliconflow")
+    except Exception as exc:
+        print(f"local asr failed, fallback to siliconflow: {exc}")
+
+    text = _to_simplified(_transcribe_siliconflow(path))
+    return text, "siliconflow"
+
+
+# ---------------------------------------------------------------
+# 语音文件本地处理（转写 -> 意图识别 -> 分发），供 /command/voice
+# 以及本机客户端直接调用（不经过 HTTP 接口）。
+# ---------------------------------------------------------------
+def process_voice_file(path: str, on_transcribed=None, on_intent=None) -> tuple[str, str, str | None, str]:
+    """处理一个本地 wav 文件，返回 (text, intent, error, channel)。
+
+    text    ：转写文本（已转简体）。
+    intent  ：识别到的意图（可能为空字符串）。
+    error   ：出错信息；成功时为 None。
+    channel ：转写渠道，"local"=本地模型，"siliconflow"=在线接口，空串=转写失败。
+
+    on_transcribed(text, channel)：转写完成后立即回调（在意图识别之前）。
+    on_intent(intent, channel)    ：意图识别出来后、调用远程/本地动作之前立即回调，
+                                    便于调用方先更新界面，再执行动作。
+    """
     t0 = time.perf_counter()
-    text = _transcribe_upload(upload, prefer_local=True)
+    try:
+        text, channel = _transcribe_with_channel(path)
+    except Exception as exc:
+        return "", "", f"transcribe failed: {exc}", ""
     t1 = time.perf_counter()
-    print(f'command/voice asr text = {text}')
-    print(f'[timing] command/voice transcribe (incl. upload+opencc): {t1 - t0:.3f}s')
+    print(f'command/voice asr text = {text} (channel={channel})')
+    print(f'[timing] command/voice transcribe (incl. opencc): {t1 - t0:.3f}s')
+
+    if on_transcribed is not None:
+        try:
+            on_transcribed(text, channel)
+        except Exception as exc:
+            print(f"on_transcribed callback failed: {exc}")
 
     try:
         intent = _classify_intention(text)
     except Exception as exc:
         print(f'command/voice intention failed: {exc}')
-        return {"code": -1, "error": f"intention failed: {exc}", "text": text}, 500
+        return text, "", f"intention failed: {exc}", channel
     t2 = time.perf_counter()
     print(f'command/voice intent = {intent}')
     print(f'[timing] command/voice intention: {t2 - t1:.3f}s')
+
+    # 意图为「未知」：不做任何提示、不执行动作，直接返回，等待下一段音频。
+    if intent in UNKNOWN_INTENTS:
+        print(f'command/voice intent is unknown, skip prompting and action: {intent!r}')
+        return text, intent, None, channel
+
+    # 意图已识别：先回调通知调用方（更新界面），再执行动作。
+    if on_intent is not None:
+        try:
+            on_intent(intent, channel)
+        except Exception as exc:
+            print(f"on_intent callback failed: {exc}")
 
     if os.environ.get("REMOTE_COMMAND") == "1":
         print(f'command/voice -> remote command: {intent}')
         proxy.send_remote_command(intent)
     elif intent in handler.ACTIONS:
         handler.ACTIONS[intent]()
-    elif intent.startswith("出价"):
-        price = _convert_price(intent[2:].strip())
-        print(f'command/voice bid price = {price}')
-        handler.bid(price)
     else:
-        return {"code": -1, "error": f"unknown intent: {intent}", "text": text, "intent": intent}, 400
+        price = _order_price(intent)
+        if price is None:
+            return text, intent, f"unknown intent: {intent}", channel
+        print(f'command/voice order price = {price}')
+        handler.bid(price)
 
     t3 = time.perf_counter()
     print(f'[timing] command/voice action dispatch: {t3 - t2:.3f}s')
     print(f'[timing] command/voice TOTAL (server-side): {t3 - t0:.3f}s')
 
-    return {"code": 0, "text": text, "intent": intent}, 200
+    return text, intent, None, channel
+
+
+@app.post("/command/voice")
+def command_voice():
+    upload = request.files.get("audio") or request.files.get("file")
+    if upload is None:
+        return {"error": "missing audio file field: audio"}, 400
+
+    suffix = os.path.splitext(upload.filename or "")[1] or ".wav"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        upload.save(tmp)
+        tmp_path = tmp.name
+
+    try:
+        text, intent, error, channel = process_voice_file(tmp_path)
+    finally:
+        os.unlink(tmp_path)
+
+    if error is not None:
+        return {"code": -1, "error": error, "text": text, "intent": intent, "channel": channel}, 400
+
+    return {"code": 0, "text": text, "intent": intent, "channel": channel}, 200
 
 
 @app.post("/command/remote")
@@ -215,7 +302,7 @@ def command_remote():
 
 
 @app.post("/command")
-def api_command():
+def command():
     data = request.get_json(silent=True) or {}
     cmd = data.get("command", request.args.get("command"))
     if cmd is None or (isinstance(cmd, str) and cmd.strip() == ""):
@@ -223,12 +310,12 @@ def api_command():
 
     if cmd in handler.ACTIONS:
         handler.ACTIONS[cmd]()
-    elif cmd.startswith("出价") or cmd.startswith("估价"):
-        price = _convert_price(cmd[2:].strip())
-        print(f'command/voice bid price = {price}')
-        handler.bid(price)
     else:
-        return {"code": -1, "error": "unknown command"}, 400
+        price = _order_price(cmd)
+        if price is None:
+            return {"code": -1, "error": "unknown command"}, 400
+        print(f'command order price = {price}')
+        handler.bid(price)
 
     return {"code": 0}, 200
 
@@ -326,4 +413,4 @@ def sync_dir_from():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5500, debug=True)
+    app.run(host="0.0.0.0", port=6000, debug=True)
