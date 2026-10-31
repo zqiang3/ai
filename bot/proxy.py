@@ -1,6 +1,7 @@
 import requests
 
 BASE_REMOTE_ADDR = 'http://192.168.1.28:6000'
+# BASE_REMOTE_ADDR = 'http://10.253.1.1:6000'
 
 
 def get(url):

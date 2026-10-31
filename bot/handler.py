@@ -3,11 +3,13 @@ from datetime import datetime
 from . import proxy
 from service import run_file
 from service import Controller, AutoBidder
+from . import manager
 
 # dict
 ACTIONS = {}
 
 C = Controller()
+M = manager.Manager()
 Bidder = AutoBidder({"a": "b"}, C)
 
 
@@ -140,6 +142,16 @@ def receive_bonus():
     ]
     execute(commands)
 
+
+def loop_sell():
+    commands = [
+        ['click', 1130, 670, 0.5],
+        ['click', 1439, 583, 0.5],
+        ['click', 1400, 770, 1],
+        ['click', 1455, 1041, 2],
+    ]
+    execute(commands)
+
 @action('弃权')
 def quit_match():
     commands = [
@@ -235,6 +247,19 @@ def mansion():
     execute(commands)
 
 
+@action('打开沉船')
+def mansion():
+    commands = [
+        ['click', 900, 1060, 0.5],
+        ['click', 900, 1060, 0.5],
+        ['click', 900, 1060, 1],
+        # ['click', 1611, 493, 1],
+        ['click', 1835, 690, 1],
+        ['click', 1600, 1050, 0.5],
+    ]
+    execute(commands)
+
+
 @action('捡快递')
 def delivery():
     commands = [
@@ -262,3 +287,86 @@ def bid(price):
         ['click', 1100, 700, 0.5],
     ]
     execute(commands)
+
+
+
+HEIGHT = 780
+WIDTH = 600
+ROWS = 13
+COLS = 10
+OFFSET_X = 1197
+OFFSET_Y = 310
+
+
+def grid_coordinates(height=HEIGHT, width=WIDTH, rows=ROWS, cols=COLS,
+                     offset_x=OFFSET_X, offset_y=OFFSET_Y):
+    """把屏幕(高 height, 宽 width)分成 rows 行 x cols 列的正文格。
+
+    返回一个二维数组：result[row][col] = (x, y)，
+    (x, y) 为该格中心点坐标，起点为左上角，并加上偏移 (offset_x, offset_y)。
+    """
+    cell_w = width / cols
+    cell_h = height / rows
+    return [
+        [
+            (int((col + 0.5) * cell_w) + offset_x, int((row + 0.5) * cell_h) + offset_y)
+            for col in range(cols)
+        ]
+        for row in range(rows)
+    ]
+
+
+@action('停止出售任务')
+def stop_sell_task():
+    M.stop()
+
+@action('停止乔治任务')
+def stop_qiaozhi_task():
+    M.stop_qiaozhi()
+
+
+@action('开始出售任务')
+def run_sell_task():
+    M.start()
+    cdt = grid_coordinates()
+    count = 0
+
+    for row in cdt:
+        if not M.enable_sell_task:
+            break
+        for g in row:
+            if not M.enable_sell_task:
+                break
+            count += 1
+            if count % 2 == 1:
+                continue
+            x, y = g
+            C.click(x, y)
+            loop_sell()
+            print(f'x ={x}, y ={y}')
+
+
+@action('乔治跑刀')
+def run_qiaozhi_task():
+    def _rank():
+        commands = [
+            ['click', 900, 1060, 0.5],
+            ['click', 900, 1060, 0.5],
+            ['click', 900, 1060, 1],
+            ['click', 1100, 600, 1],
+            ['click', 1600, 1050, 0.5],
+        ]
+        execute(commands)
+
+
+    M.start_qiaozhi()
+    cnt = 0
+    while M.qiaozhi:
+        print('出价6元')
+        Bidder.bid_price("6")
+        time.sleep(10)
+        cnt += 1
+        if cnt % 5 == 0:
+            _rank()
+
+
