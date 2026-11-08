@@ -1,7 +1,9 @@
 import requests
 
-BASE_REMOTE_ADDR = 'http://192.168.1.28:6000'
-# BASE_REMOTE_ADDR = 'http://10.253.1.1:6000'
+# BASE_REMOTE_ADDR = 'http://10.2.108.169:6000'
+BASE_REMOTE_ADDR = 'http://192.168.1.192:6000'
+# BASE_REMOTE_ADDR = 'http://192.168.1.211:6000'
+# BASE_REMOTE_ADDR = 'http://192.168.68.51:6000'
 
 
 def get(url):
@@ -21,7 +23,10 @@ def get_stream(url):
 
 
 def post(url, payload):
-    resp = requests.post(url, json=payload)
+    try:
+        resp = requests.post(url, json=payload)
+    except Exception as e:
+        print(f'requests.post failed! payload={payload}')
     if resp.status_code == 200:
         return resp.json()
     else:
@@ -69,6 +74,22 @@ def bid(price: str):
 
     print(f'response: {data}')
     return
+
+
+def send_remote_command(command, base_url=BASE_REMOTE_ADDR):
+    url = f'{base_url}/command'
+    print(f'proxy.send_remote_command, command={command}')
+    print(f'send_remote_command, command={command}')
+    req = dict(
+        command=command,
+    )
+    resp = post(url, req)
+    if not resp.get('success', False):
+        print(f'unexpected error: {resp}')
+        return resp
+
+    print(f'response: {resp}')
+    return resp
 
 
 def sync_file(filename):

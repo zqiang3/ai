@@ -6,4 +6,3 @@ requests
 flask>=3.0.0
 faster-whisper>=1.0.0
 opencc-python-reimplemented>=0.1.7
-av==18.1.0
