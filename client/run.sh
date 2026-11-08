@@ -37,4 +37,4 @@ load_env "$CLIENT_DIR/.env"
 load_env "$PROJECT_DIR/.env"
 
 export REMOTE_COMMAND=1
-exec "$PY" "$CLIENT_DIR/asr_client.py"
+exec "$PY" "$CLIENT_DIR/main.py"

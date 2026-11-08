@@ -12,6 +12,7 @@ from flask import Flask, Response, request, jsonify
 
 @contextmanager
 def _timed(label):
+
     start = time.perf_counter()
     try:
         yield

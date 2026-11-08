@@ -23,5 +23,5 @@ if exist "%ENV_FILE%" (
   )
 )
 
-"%PY%" "%CLIENT_DIR%asr_client.py"
+"%PY%" "%CLIENT_DIR%main.py"
 endlocal
